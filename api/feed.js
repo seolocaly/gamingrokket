@@ -1,0 +1,16 @@
+// GET /api/feed — real fixtures, scores and Rokket odds from The Odds API, cached at Vercel's edge.
+const {CFG,api,normalize,SPORTMAP,getQuota}=require('./_odds');
+let mem={at:0,data:null,sports:null,sportsAt:0};
+async function activeSports(){if(mem.sports&&Date.now()-mem.sportsAt<6*3600e3)return mem.sports;const all=await api('/sports',{});const keys=new Set(CFG.sports);if(CFG.tennis)all.filter(s=>s.active&&s.group==='Tennis'&&!s.has_outrights).forEach(s=>keys.add(s.key));mem.sports=all.filter(s=>keys.has(s.key)&&s.active).map(s=>({key:s.key,title:s.title}));mem.sportsAt=Date.now();return mem.sports}
+function mock(){const now=Date.now(),t=Math.floor(now/20000);const ev=(i,lg,h,a,sp,live)=>({id:'rmock'+i,sport:sp,league:lg+' (mock)',home:h,away:a,start:new Date(now-(live?40:-90)*60e3).toISOString(),status:live?'live':'pre',score:live?[(t+i)%3,(t*7+i)%2]:null,h2h:sp==='football'?{home:+(2+((t+i)%5)/20).toFixed(2),draw:3.4,away:+(3.3-((t+i)%4)/20).toFixed(2)}:{home:1.8,away:2.05,draw:null},totals:{point:sp==='football'?2.5:221.5,over:1.9,under:1.9}});
+  return {updated:now,books:3,quota:{remaining:'mock'},events:[ev(0,'Premier League','Arsenal','Chelsea','football',1),ev(1,'La Liga','Barcelona','Real Madrid','football',1),ev(2,'NBA','Lakers','Celtics','basketball',0),ev(3,'NHL','Oilers','Leafs','hockey',0)]}}
+async function build(){const sports=await activeSports();const events=new Map();const books=new Set();
+  await Promise.all(sports.map(async s=>{try{const data=await api(`/sports/${s.key}/odds`,{regions:CFG.regions,markets:CFG.markets,oddsFormat:'decimal'});for(const ev of data){const n=normalize(ev,s.key,s.title);n.books.forEach(b=>books.add(b));delete n.books;events.set(n.id,n)}
+    const live=[...events.values()].some(e=>e.league===s.title&&e.status==='live')||(mem.data&&mem.data.events.some(e=>e.league===s.title&&e.status==='live'));if(live){const sc=await api(`/sports/${s.key}/scores`,{daysFrom:'1'});for(const x of sc){const id='r'+x.id;const score=x.scores?[+(x.scores.find(q=>q.name===x.home_team)||{}).score||0,+(x.scores.find(q=>q.name===x.away_team)||{}).score||0]:null;
+      const e=events.get(id)||(x.completed?{id,sport:SPORTMAP(s.key),league:s.title,home:x.home_team,away:x.away_team,start:x.commence_time}:null);if(!e)continue;e.score=score;e.status=x.completed?'ended':new Date(x.commence_time)<=new Date()?'live':'pre';if(x.completed){delete e.h2h;delete e.totals;delete e.spreads}events.set(id,e)}}}catch(err){console.error(s.key,err.message)}}));
+  return {updated:Date.now(),books:books.size,quota:getQuota(),events:[...events.values()]}}
+module.exports=async(req,res)=>{res.setHeader('content-type','application/json');res.setHeader('cache-control',`public, s-maxage=${CFG.ttl}, stale-while-revalidate=${CFG.ttl*4}`);
+  try{if(CFG.mock){res.setHeader('cache-control','no-store');return res.end(JSON.stringify(mock()))}
+    if(!CFG.key){res.statusCode=503;return res.end(JSON.stringify({error:'ODDS_API_KEY is not set'}))}
+    if(!mem.data||Date.now()-mem.at>CFG.ttl*1000){mem.data=await build();mem.at=Date.now()}res.end(JSON.stringify(mem.data))}
+  catch(e){if(mem.data)return res.end(JSON.stringify(mem.data));res.statusCode=502;res.end(JSON.stringify({error:e.message}))}};

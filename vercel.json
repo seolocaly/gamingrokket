@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": null,
+  "installCommand": null,
+  "outputDirectory": "public",
+  "functions": { "api/*.js": { "maxDuration": 30 } },
+  "headers": [
+    { "source": "/(.*)\\.(js|css|svg)", "headers": [{ "key": "cache-control", "value": "public, max-age=300" }] }
+  ]
+}
